@@ -1,0 +1,260 @@
+---
+title: "Praktikum 5 Anreg"
+author: "Najwa Salsabila M.N"
+date: "2026-06-25"
+output:
+  rmdformats::readthedown
+---
+
+# Library
+
+```{r}
+library(readxl)   # untuk membaca data
+library(GGally)   # untuk menghasilkan matriks hubungan antarpeubah
+library(corrplot) # untuk menghasilkan matriks korelasi
+library(dplyr)    # untuk manipulasi data
+library(car)      # untuk memeriksa multikolinearitas
+```
+
+# Data
+
+```{r}
+data <- read_excel("C:\\Users\\najwe\\OneDrive\\Dokumen\\SEMESTER 4\\ANREG\\Data Prak Anreg.xlsx", sheet="Data Gabungan Anreg")
+
+# Rename kolom
+colnames(data) <- c("Provinsi", "PBP", "IDL", "IKU", "IKA", "SL", "PBS", "TPR")
+
+head(data)
+str(data)
+summary(data)
+```
+
+Data yang digunakan merupakan data tingkat provinsi di Indonesia. Data tersebut terdiri atas satu peubah respon, yaitu **Prevalensi Balita Pneumonia (PBP)**, dan enam peubah penjelas, yaitu:
+
+- **IDL**: Persentase Anak Umur 12–23 Bulan yang Menerima Imunisasi Dasar Lengkap
+- **IKU**: Indeks Kualitas Udara
+- **IKA**: Indeks Kualitas Air
+- **SL**: Persentase Rumah Tangga yang Memiliki Akses terhadap Sanitasi Layak
+- **PBS**: Prevalensi Balita Stunting
+- **TPR**: Total Jumlah Perokok di atas 15 Tahun
+
+Peubah yang tidak digunakan dalam pemodelan, yaitu peubah Provinsi, dapat dihapus. Terdapat 4 baris dengan nilai hilang (missing value) pada peubah SL dan TPR (provinsi Papua yang baru dimekarkan), sehingga analisis dilakukan terhadap 34 observasi lengkap.
+
+```{r}
+dt <- data %>%
+  select(-Provinsi) %>%
+  na.omit()
+```
+
+# Eksplorasi Data
+
+```{r}
+hist(dt$PBP, main = "Sebaran Prevalensi Balita Pneumonia",
+     xlab = "Prevalensi Balita Pneumonia (%)", col = "lightblue")
+```
+
+```{r}
+boxplot(dt$PBP, main = "Sebaran Prevalensi Balita Pneumonia",
+        ylab = "Prevalensi Balita Pneumonia (%)")
+```
+
+```{r}
+ggpairs(dt,
+        upper = list(continuous = wrap('cor', size = 3)),
+        title = "Matriks Scatterplot Data")
+```
+
+```{r}
+cor_matrix <- cor(dt, use = "complete.obs")
+
+corrplot(cor_matrix, method = "color", type = "lower",
+         col = colorRampPalette(c("red", "white", "blue"))(200),
+         addCoef.col = "black", tl.col = "black", tl.srt = 35)
+```
+
+Hasil matriks scatter plot dan korelasi menunjukkan bahwa peubah respon PBP memiliki hubungan **positif** dengan IDL (r = 0,51) dan hubungan **negatif** dengan IKU (r = −0,49), IKA (r = −0,52), dan TPR (r = −0,38). Peubah SL dan PBS memiliki korelasi yang lebih lemah dengan PBP.
+
+Korelasi antar peubah penjelas relatif rendah (sebagian besar di bawah 0,5), sehingga potensi multikolinearitas tidak terlalu mengkhawatirkan, namun tetap perlu diperiksa secara formal melalui nilai VIF.
+
+# Pemodelan
+
+## Tanpa Fungsi
+
+Perhitungan nilai $\hat{\beta}$ secara matriks dapat dilakukan dengan rumus berikut.
+
+$$\hat{\beta} = (X'X)^{-1} X'y$$
+
+```{r}
+# Pembentukan matriks
+n  <- nrow(dt)
+x0 <- rep(1, n)
+x  <- data.frame(x0, dt$IDL, dt$IKU, dt$IKA, dt$SL, dt$PBS, dt$TPR)
+x  <- as.matrix(x)
+y  <- dt$PBP
+```
+
+```{r}
+beta_duga <- solve(t(x) %*% x) %*% t(x) %*% y
+beta_duga
+```
+
+Hasil tersebut menjelaskan bahwa persamaan yang terbentuk adalah:
+
+$$\hat{PBP} = 6{,}8951 + 0{,}0179\,IDL - 0{,}0405\,IKU - 0{,}0238\,IKA - 0{,}0132\,SL + 0{,}0111\,PBS - 0{,}0497\,TPR$$
+
+Selang kepercayaan dan pengujian signifikansi setiap parameter dapat dilakukan dengan menghitung keragaman tiap dugaan parameter. Secara umum, nilai ragam dugaan parameter $\hat{\beta}_j$ dapat dihitung melalui rumus berikut.
+
+$$\text{Var}(\hat{\beta}_j) = \hat{\sigma}^2 C_{jj}$$
+
+dengan matriks $C$ adalah matriks $(X'X)^{-1}$.
+
+```{r}
+c_mat <- data.frame(solve(t(x) %*% x))
+```
+
+Unsur diagonal dari matriks $C$ dapat digunakan untuk menghitung nilai galat baku dari setiap dugaan parameter. Galat baku ini digunakan untuk menghitung selang kepercayaan dari dugaan yang dihasilkan.
+
+$$SE(\hat{\beta}_j) = \sqrt{\text{Var}(\hat{\beta}_j)} = \hat{\sigma}\sqrt{c_{jj}}$$
+
+Misal ingin dihitung selang kepercayaan dari dugaan parameter $\beta_1$ (IDL), maka:
+
+```{r}
+y_hat     <- x %*% beta_duga
+residuals <- y - y_hat
+n         <- nrow(x)
+p         <- ncol(x)
+KTG       <- sum(residuals^2) / (n - p)
+
+c11 <- c_mat[2, 2]   # elemen diagonal untuk beta_1 (IDL)
+
+(se.b1 <- sqrt(KTG * c11))
+```
+
+```{r}
+alfa <- 0.05
+
+# Batas Bawah beta_1 (IDL)
+(bb.b1 <- beta_duga[2, 1] - abs(qt(alfa / 2, df = n - p)) * se.b1)
+```
+
+```{r}
+# Batas Atas beta_1 (IDL)
+(ba.b1 <- beta_duga[2, 1] + abs(qt(alfa / 2, df = n - p)) * se.b1)
+```
+
+Dengan demikian, selang kepercayaan 95% untuk $\hat{\beta}_1$ (IDL) adalah:
+
+$$0{,}0083 < \hat{\beta}_1 < 0{,}0276$$
+
+Selang kepercayaan ini **tidak memuat nilai 0**, sehingga dapat disimpulkan bahwa parameter $\beta_1$ signifikan pada taraf nyata 5%. Artinya, peubah IDL (persentase imunisasi dasar lengkap) berpengaruh signifikan terhadap prevalensi balita pneumonia.
+
+# Dengan Fungsi
+
+```{r}
+model1 <- lm(formula = PBP ~ ., data = dt)
+summary(model1)
+```
+
+Dugaan parameter model secara matriks dan fungsi menghasilkan angka yang sama, sehingga perhitungan matriks sudah tepat. Pada ringkasan model ini dapat dilihat bahwa peubah **IDL, IKU, IKA, dan TPR** signifikan pada taraf nyata 5%, sedangkan peubah **SL dan PBS** tidak signifikan. Secara simultan, model ini sangat signifikan dengan nilai p ≈ 0,000 dan nilai Adjusted R² = 0,6537, artinya sekitar 65,37% keragaman prevalensi balita pneumonia dapat dijelaskan oleh keenam peubah penjelas tersebut.
+
+# Pemeriksaan Multikolinearitas
+
+```{r}
+vif(model1)
+```
+
+Hasil uji VIF menunjukkan bahwa **seluruh peubah memiliki nilai VIF < 5**, sehingga tidak terdapat indikasi multikolinearitas yang serius pada model pertama ini. Kondisi ini berbeda dengan data sebelumnya; data pneumonia balita ini memiliki struktur korelasi antar peubah yang lebih rendah.
+
+# Pemodelan Kedua
+
+Meskipun tidak ada multikolinearitas, dilakukan pemodelan kedua dengan menghapus peubah **SL** yang tidak signifikan dan memiliki kontribusi paling kecil, untuk melihat apakah model yang lebih sederhana menghasilkan kinerja yang lebih baik.
+
+```{r}
+model2 <- lm(PBP ~ IDL + IKU + IKA + PBS + TPR, data = dt)
+summary(model2)
+```
+
+Persamaan yang terbentuk adalah:
+
+$$\hat{PBP} = 5{,}5128 + 0{,}0140\,IDL - 0{,}0350\,IKU - 0{,}0275\,IKA + 0{,}0182\,PBS - 0{,}0462\,TPR$$
+
+```{r}
+vif(model2)
+```
+
+Model kedua tetap tidak mengalami masalah multikolinearitas (seluruh VIF < 5). Namun peubah **PBS masih tidak signifikan** (p = 0,071). Secara keseluruhan model masih signifikan dengan Adjusted R² = 0,6195. Model ini sedikit lebih sederhana namun memiliki kinerja yang sedikit lebih rendah dibanding model penuh, sehingga perlu dilakukan perbandingan lebih lanjut melalui indikator AIC dan BIC.
+
+# Uji Hipotesis Kesamaan Parameter Regresi
+
+Misal ingin dilakukan pemodelan dengan peubah respon Prevalensi Balita Pneumonia menggunakan dua peubah penjelas utama yang berkorelasi dengan PBP, yaitu IDL dan IKU.
+
+```{r}
+model4 <- lm(PBP ~ IDL + IKU, data = dt)
+summary(model4)
+```
+
+```{r}
+vif(model4)
+```
+
+Regresi yang dihasilkan tidak mengalami masalah multikolinearitas. Hasil menunjukkan bahwa **kedua peubah IDL dan IKU signifikan** pada taraf nyata 5%. Persamaan yang terbentuk adalah:
+
+$$\hat{PBP} = 4{,}7145 + 0{,}0188\,IDL - 0{,}0372\,IKU$$
+
+Selanjutnya dilakukan serangkaian uji untuk memeriksa apakah $\beta_{IDL}$ dan $\beta_{IKU}$ dapat diasumsikan sama.
+
+Hipotesis yang diuji adalah:
+
+$$H_0: \beta_{IDL} = \beta_{IKU}$$
+$$H_1: \beta_{IDL} \neq \beta_{IKU}$$
+
+Jika $H_0$ benar $(\beta_{IDL} = \beta_{IKU} = \beta_1')$, model dapat ditulis ulang sebagai:
+
+$$PBP = \beta_0 + \beta_1'(IDL + IKU) + \varepsilon$$
+
+```{r}
+# Buat peubah baru
+dt$X_new <- dt$IDL + dt$IKU
+
+# Model Penuh (Full Model)
+model_full <- lm(PBP ~ IDL + IKU, data = dt)
+
+# Model Terbatas (Restricted Model)
+model_restricted <- lm(PBP ~ X_new, data = dt)
+
+# Bandingkan dengan Uji F
+anova(model_restricted, model_full)
+```
+
+Hasil perbandingan menunjukkan bahwa nilai p < alpha (p ≈ 0,000) sehingga **tolak $H_0$**, artinya peubah IDL dan IKU memiliki pengaruh yang berbeda secara signifikan terhadap PBP sehingga tidak dapat digabungkan. Selanjutnya dapat dipilih model terbaik antara model dengan dua peubah (IDL + IKU) atau satu peubah (IDL saja) berdasarkan indikator Adjusted R², AIC, dan BIC.
+
+```{r}
+model_all   <- lm(PBP ~ IDL + IKU, data = dt)
+summary(model_all)
+```
+
+```{r}
+model_signif <- lm(PBP ~ IDL, data = dt)
+summary(model_signif)
+```
+
+```{r}
+perbandingan <- data.frame(
+  Model        = c("Dua Peubah (IDL + IKU)", "Satu Peubah (IDL)"),
+  Adjusted_R2  = as.numeric(c(summary(model_all)$adj.r.squared,
+                               summary(model_signif)$adj.r.squared)),
+  AIC          = as.numeric(c(AIC(model_all), AIC(model_signif))),
+  BIC          = as.numeric(c(BIC(model_all), BIC(model_signif)))
+)
+perbandingan
+```
+
+Berdasarkan indikator Adjusted R², AIC, dan BIC, **model dengan dua peubah (IDL + IKU) dipilih sebagai model yang terbaik** karena memiliki Adjusted R² lebih tinggi serta AIC dan BIC yang lebih kecil. Persamaan yang terbentuk adalah:
+
+$$\hat{PBP} = 4{,}7145 + 0{,}0188\,IDL - 0{,}0372\,IKU$$
+
+**Interpretasi:**
+
+1. Dugaan rataan prevalensi balita pneumonia apabila IDL dan IKU bernilai 0 adalah **4,7145%**.
+2. Dugaan rataan prevalensi balita pneumonia akan **meningkat sebesar 0,0188%** apabila persentase anak yang menerima imunisasi dasar lengkap (IDL) meningkat satu persen, dengan asumsi indeks kualitas udara konstan. Hal ini mungkin mencerminkan efek seleksi, di mana daerah dengan cakupan imunisasi tinggi juga memiliki populasi balita yang lebih padat atau berisiko.
+3. Dugaan rataan prevalensi balita pneumonia akan **menurun sebesar 0,0372%** apabila indeks kualitas udara (IKU) meningkat satu poin, dengan asumsi persentase imunisasi dasar lengkap konstan. Hal ini sejalan dengan ekspektasi bahwa kualitas udara yang lebih baik berkaitan dengan menurunnya risiko penyakit pernapasan seperti pneumonia pada balita.
