@@ -1,0 +1,185 @@
+---
+title: "Praktikum 8"
+author: "Najwa Salsabila M.N"
+date: "2026-06-26"
+output:
+  rmdformats::readthedown
+---
+
+# Package
+
+```{r, warning=FALSE, message=FALSE}
+library(readxl)
+library(car)     # untuk multikolinearitas
+library(olsrr)   # untuk best subset
+library(MASS)    # untuk forward, backward, dan stepwise
+library(glmnet)  # untuk ridge dan lasso
+```
+
+# Uji F Parsial dan Sekuensial
+
+```{r}
+data(mtcars)
+head(mtcars)
+```
+
+Kita pakai: Y = mpg, X1 = wt, X2 = hp, X3 = disp
+
+## F Sekuensial
+
+```{r}
+# Model 1: tanpa prediktor
+m1 <- lm(mpg ~ 1, data = mtcars)
+
+# Model 2: tambah wt
+m2 <- lm(mpg ~ wt, data = mtcars)
+
+# Model 3: tambah hp
+m3 <- lm(mpg ~ wt + hp, data = mtcars)
+
+# Model 4: tambah disp
+m4 <- lm(mpg ~ wt + hp + disp, data = mtcars)
+```
+
+```{r}
+anova(m1, m2, m3, m4)
+```
+
+Variabel wt berpengaruh signifikan terhadap mpg (p < 0.001). Setelah memasukkan wt, variabel hp masih memberikan tambahan pengaruh yang signifikan (p ≈ 0.0018). Namun, setelah wt dan hp ada dalam model, variabel disp tidak memberikan pengaruh tambahan yang signifikan (p ≈ 0.93).
+
+Kesimpulan: Model yang cukup baik adalah mpg ~ wt + hp, karena penambahan disp tidak meningkatkan kemampuan model secara signifikan.
+
+## F Parsial
+
+Akan diuji apakah hp signifikan setelah semua variabel lain dikontrol.
+
+```{r}
+# Model penuh
+full <- lm(mpg ~ wt + hp + disp, data = mtcars)
+
+# Model tereduksi (tanpa hp)
+red <- lm(mpg ~ wt + disp, data = mtcars)
+
+anova(red, full)
+```
+
+Variabel hp berpengaruh signifikan terhadap mpg setelah mengontrol wt dan disp (p < 0.05).
+
+# Data
+
+```{r}
+dt_raw <- read_xlsx("C:\\Users\\najwe\\OneDrive\\Dokumen\\SEMESTER 4\\ANREG\\Data Prak Anreg.xlsx", sheet="Data Gabungan Anreg")
+colnames(dt_raw) <- c("Provinsi", "PBP", "IDL", "IKU", "IKA", "SL", "PBS", "TPR")
+dt_raw
+```
+
+Data yang digunakan adalah data tingkat provinsi di Indonesia dengan 1 peubah respon yaitu **Prevalensi Balita Pneumonia (PBP)** dan 6 peubah penjelas:
+
+- **IDL**: Persentase Anak Umur 12–23 Bulan yang Menerima Imunisasi Dasar Lengkap
+- **IKU**: Indeks Kualitas Udara
+- **IKA**: Indeks Kualitas Air
+- **SL**: Persentase Rumah Tangga yang Memiliki Akses terhadap Sanitasi Layak
+- **PBS**: Prevalensi Balita Stunting
+- **TPR**: Total Jumlah Perokok di atas 15 Tahun
+
+Empat provinsi pemekaran Papua tidak memiliki data lengkap sehingga analisis menggunakan 34 provinsi.
+
+```{r}
+dt <- dt_raw[, -1]       # hapus kolom Provinsi
+dt <- na.omit(dt)        # hapus baris dengan missing value
+```
+
+
+# Pemodelan Awal
+
+```{r}
+model1 <- lm(PBP ~ ., data = dt)
+summary(model1)
+```
+
+Persamaan yang terbentuk dari seluruh peubah penjelas adalah:
+
+$$\hat{PBP} = 6.8951 + 0.0179\,IDL - 0.0405\,IKU - 0.0238\,IKA - 0.0132\,SL + 0.0111\,PBS - 0.0497\,TPR$$
+
+Model menghasilkan nilai Adjusted R² sebesar 65.37% dengan 4 parameter yang signifikan (IDL, IKU, IKA, TPR) dan 2 yang tidak signifikan (SL dan PBS). Tidak ada perubahan tanda yang bertentangan dengan arah korelasi, sehingga model tidak mengindikasikan adanya masalah multikolinearitas. Namun perlu diperiksa secara formal.
+
+# Pemeriksaan Multikolinearitas
+
+```{r}
+vif(model1)
+```
+
+Hasil pemeriksaan nilai VIF menunjukkan semua peubah penjelas memiliki VIF < 2, jauh di bawah ambang batas 10, sehingga **tidak terdapat masalah multikolinearitas** pada model.
+
+# Penyeleksian Peubah
+
+## Best Subset
+
+```{r}
+bs <- ols_step_best_subset(model1)
+bs
+```
+
+## Backward, Forward, dan Stepwise
+
+```{r}
+null <- lm(PBP ~ 1, data = dt)
+full <- lm(PBP ~ ., data = dt)
+
+step(full, scope = list(lower = null, upper = full), data = dt, direction = 'backward', trace = 0)
+```
+
+```{r}
+step(null, scope = list(lower = null, upper = full), data = dt, direction = 'forward', trace = 0)
+```
+
+```{r}
+step(null, scope = list(lower = null, upper = full), data = dt, direction = 'both', trace = 0)
+```
+
+Hasil penyeleksian melalui best subset, backward, forward, dan stepwise menghasilkan model yang sama, yaitu dengan **5 peubah penjelas: IDL, IKU, IKA, SL, dan TPR** (peubah PBS dikeluarkan karena tidak memberikan kontribusi signifikan).
+
+```{r}
+model2 <- lm(PBP ~ IDL + IKU + IKA + SL + TPR, data = dt)
+summary(model2)
+```
+
+```{r}
+AIC(model2); BIC(model2)
+```
+
+Model yang dihasilkan memiliki 4 peubah penjelas yang signifikan pada taraf nyata 5% (IDL, IKU, SL, TPR) dan 1 yang tidak signifikan (IKA, p ≈ 0.065) dengan Adjusted R² = 65.07%, hanya sedikit lebih rendah dari model penuh. Nilai AIC model ini adalah 16.978 dan BIC sebesar 26.136, keduanya lebih baik dari model dengan semua peubah.
+
+$$\hat{PBP} = 7.1114 + 0.0184\,IDL - 0.0404\,IKU - 0.0197\,IKA - 0.0160\,SL - 0.0495\,TPR$$
+
+Jika pada metode seleksi peubah yang digunakan menghasilkan model yang berbeda, maka dapat dibandingkan nilai MSE, Adjusted R², AIC, BIC, dan kriteria lainnya untuk memilih model terbaik.
+
+# Shrinkage Methods
+
+## Ridge
+
+```{r}
+x <- as.matrix(dt[, -1])  # semua kolom kecuali PBP
+y <- dt$PBP
+
+rid <- cv.glmnet(x, y, alpha = 0, nfolds = 5)  # Ridge regression
+# nfolds = 5 karena n = 34 (lebih aman untuk data kecil)
+rid
+coef(rid, s = "lambda.min")
+```
+
+Model yang terbentuk menggunakan semua peubah penjelas, pemodelan ridge akan lebih terlihat berguna jika digunakan peubah yang terdapat multikolinearitas sehingga tidak perlu disisihkan ketika ada yang memiliki VIF > 10
+
+$$\hat{PBP} \approx 6.44187751 + 0.01637728IDL -0.03708414IKU -0.02399150IKA + -0.01089604SL + 0.01040311PBS -0.04658155TPR$$
+
+## Lasso
+
+```{r}
+lass <- cv.glmnet(x, y, alpha = 1, nfolds = 5)
+lass
+coef(lass, s = "lambda.min")
+```
+
+Lasso menghasilkan pemodelan regresi dengan penyusutan/penyeleksian peubah yang memiliki koefisien yang sangat mendekati atau bahkan tepat nol
+
+$$\hat{PBP} = 6.8951 + 0.0179\,IDL - 0.0405\,IKU - 0.0238\,IKA - 0.0132\,SL + 0.0111\,PBS - 0.0497\,TPR$$
