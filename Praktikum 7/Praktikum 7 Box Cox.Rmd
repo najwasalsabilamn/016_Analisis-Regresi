@@ -1,0 +1,344 @@
+---
+title: "Praktikum 7 (Transformasi Box-Cox)"
+author: "Najwa Salsabila M.N"
+date: "2026-06-26"
+output:
+  rmdformats::readthedown
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Asumsi sisaan yang harus dipenuhi dari model regresi linear adalah sebagai berikut:
+
+1. Nilai harapan galat sama dengan nol $(E[\varepsilon_i]=0)$
+2. Homoskedastisitas atau ragam galat homogen $(Var[\varepsilon]=\sigma^2I)$
+3. Autokorelasi atau galat saling bebas $(E[\varepsilon_i,\varepsilon_j]=0)$
+4. Galat menyebar Normal $(\varepsilon \sim N(0,\sigma^2I))$
+5. Tidak ada multikolinearitas antarpeubah bebas $(cov(x_i,x_j)=0, \forall i \neq j)$
+
+Jika terdapat asumsi sisaan yang dilanggar pada model, maka diperlukan penanganan kondisi tak standar.
+
+# Library
+
+```{r, warning=FALSE, message=FALSE}
+library(readxl)
+library(dplyr)    # untuk manipulasi data
+library(GGally)   # visualisasi hubungan peubah
+library(psych)    # analisis data/korelasi
+library(car)      # untuk multikolinearitas dan uji durbin
+library(lmtest)   # untuk uji breusch pagan
+library(corrplot) # visualisasi korelasi
+library(nortest)  # untuk uji lilliefors
+library(MASS)     # Box-Cox
+```
+
+# Data
+
+```{r}
+dt_raw <- read_xlsx("C:\\Users\\najwe\\OneDrive\\Dokumen\\SEMESTER 4\\ANREG\\Data Prak Anreg.xlsx", sheet="Data Gabungan Anreg")
+colnames(dt_raw) <- c("Provinsi", "PBP", "IDL", "IKU", "IKA", "SL", "PBS", "TPR")
+
+dt <- dt_raw %>%
+  dplyr::select(-Provinsi) %>%
+  na.omit()
+
+dt
+```
+
+Data yang digunakan adalah data tingkat provinsi di Indonesia (34 provinsi dengan data lengkap) dengan 1 peubah respon yaitu **Prevalensi Balita Pneumonia (PBP)** dan 6 peubah penjelas: IDL, IKU, IKA, SL, PBS, dan TPR.
+
+# Pemodelan Regresi Linear
+
+## Eksplorasi Data
+
+Sebagai langkah awal analisis, dilakukan eksplorasi terhadap seluruh peubah yang digunakan untuk memeriksa sebaran setiap peubah dan potensi amatan anomali.
+
+```{r}
+pairs.panels(dt)
+```
+
+```{r}
+ggpairs(dt,
+        upper = list(continuous = wrap('cor', size = 3)),
+        title = "Matriks Scatterplot Data")
+```
+
+```{r}
+cor_matrix <- cor(dt, use = "complete.obs")
+
+corrplot(cor_matrix, method = "color", type = "lower",
+         col = colorRampPalette(c("red", "white", "blue"))(200),
+         addCoef.col = "black", tl.col = "black", tl.srt = 35)
+```
+
+Hasil eksplorasi terhadap hubungan setiap peubah penjelas dengan PBP menunjukkan bahwa IDL memiliki hubungan positif (r = 0.51), sementara IKU (r = −0.49), IKA (r = −0.52), dan TPR (r = −0.38) memiliki hubungan negatif dengan PBP. Peubah SL (r = 0.18) dan PBS (r = −0.11) memiliki hubungan yang lebih lemah. Korelasi antar peubah penjelas relatif rendah sehingga tidak mengindikasikan masalah multikolinearitas yang serius.
+
+## Pemodelan
+
+```{r}
+model <- lm(PBP ~ ., data = dt)
+(vif_model <- vif(model))
+```
+
+Setelah dilakukan pengujian, diketahui bahwa tidak terdapat multikolinearitas antarpeubah penjelas. Hal ini diindikasikan oleh nilai VIF < 5 pada seluruh peubah penjelas yang digunakan.
+
+```{r}
+summary(model)
+```
+
+Pemodelan menggunakan seluruh peubah menghasilkan persamaan:
+
+$$\hat{PBP} = 6.8951 + 0.0179\,IDL - 0.0405\,IKU - 0.0238\,IKA - 0.0132\,SL + 0.0111\,PBS - 0.0497\,TPR$$
+
+Model ini signifikan secara simultan dengan Adjusted R² = 65.37%. Hanya peubah **IDL, IKU, IKA, dan TPR** yang berpengaruh signifikan pada taraf nyata 5%, sedangkan **SL dan PBS** tidak signifikan. Penyeleksian peubah dapat dilakukan agar model yang dihasilkan lebih efisien.
+
+# Seleksi Peubah
+
+## Metode Backward
+
+Prosedur seleksi peubah dengan metode backward berjalan sebagai berikut
+1. Langkah dimulai dengan melakukan pemodelan terhadap seluruh peubah penjelas yang kita punya
+2. Selanjutnya, satu per satu peubah penjelas akan dieliminasi berdasarkan nilai F-parsial yang paling besar (paling tidak berpengaruh signifikan) terhadap peubah respons
+3. Peubah penjelas yang telah dieliminasi tidak akan dikembalikan dalam model
+4. Eliminasi peubah penjelas terus dilakukan hingga diperoleh model terbaik berdasarkan metrik yang diacu (biasanya AIC)
+
+```{r}
+step(lm(PBP ~ ., data = dt), direction = "backward")
+```
+
+## Metode Forward
+
+Prosedur seleksi peubah dengan metode forward berjalan sebagai berikut
+1. Langkah dimulai dengan melakukan pemodelan hanya terhadap intersep
+2. Selanjutnya, satu per satu peubah penjelas akan dimasukkan ke model berdasarkan nilai koefisien korelasi yang paling besar terhadap peubah respons
+4. Peubah penjelas yang telah dimasukkan tidak akan dieliminasi dari model
+5. Imputasi peubah penjelas terus dilakukan hingga diperoleh model terbaik berdasarkan metrik yang diacu (biasanya AIC)
+
+```{r}
+step(lm(PBP ~ 1, data = dt), direction = "forward",
+     scope = ~ IDL + IKU + IKA + SL + PBS + TPR)
+```
+
+## Metode Stepwise
+
+Sementara itu, prosedur seleksi peubah stepwise merupakan kombinasi antara metode backward dan forward. Model pertama yang dibentuk adalah model dengan seluruh peubah penjelas yang kemudian akan dieliminasi satu per satu. Meskipun demikian, peubah yang telah dieliminasi masih memiliki kemungkinan untuk diimputasi kembali ke dalam model.
+
+```{r}
+step(lm(PBP ~ ., data = dt), direction = "both")
+```
+
+## Pemodelan Terbaik
+
+Berdasarkan ketiga metode seleksi peubah di atas, model terbaik yang terbentuk adalah model dengan **5 peubah penjelas: IDL, IKU, IKA, SL, dan TPR** (peubah PBS dikeluarkan karena tidak signifikan dan tidak meningkatkan AIC).
+
+```{r}
+model2 <- lm(PBP ~ IDL + IKU + IKA + SL + TPR, data = dt)
+summary(model2)
+```
+
+Persamaan regresi yang terbentuk dari hasil penyeleksian peubah adalah:
+
+$$\hat{PBP} = 7.1114 + 0.0184\,IDL - 0.0404\,IKU - 0.0197\,IKA - 0.0160\,SL - 0.0495\,TPR$$
+
+Model memiliki Adjusted R² = 65.07% dengan peubah **IDL, IKU, SL, dan TPR** signifikan pada taraf nyata 5%. Peubah IKA berada di batas signifikansi (p ≈ 0.065).
+
+# Diagnostik Sisaan / Pengujian Asumsi
+
+## Eksplorasi Grafik
+
+### Plot Sisaan vs Y Duga
+
+```{r}
+plot(model2, 1)
+```
+
+1. Sisaan tersebar di sekitar 0 → nilai harapan sisaan sama dengan nol
+2. Lebar pita relatif sama untuk setiap nilai dugaan, ragam sisaan homogen
+3. Pola plot acak → model pas dan ragam sisaan homogen
+
+### Plot Sisaan vs Urutan
+
+```{r}
+plot(x = 1:nrow(dt),
+     y = model2$residuals,
+     type = 'b',
+     ylab = "Residuals",
+     xlab = "Observation")
+```
+
+Tebaran tidak berpola → sisaan saling bebas, model pas.
+
+### QQ Plot
+
+```{r}
+plot(model2, 2)
+```
+
+Amatan cenderung mengikuti garis diagonal sehingga sisaan diduga menyebar normal. Perlu dikonfirmasi melalui uji formal.
+
+## Uji Formal
+
+### Nilai Harapan Sisaan Sama dengan Nol
+
+```{r}
+t.test(model2$residuals, mu = 0, conf.level = 0.95)
+```
+
+Nilai p pada uji t sama dengan 1 yang lebih besar dari alpha 5%, sehingga dinyatakan asumsi nilai harapan sisaan sama dengan nol **terpenuhi**.
+
+### Ragam Sisaan Homogen
+
+```{r}
+bptest(model2)
+```
+
+Nilai p pada uji Breusch-Pagan lebih besar dari alpha 5%, sehingga dinyatakan asumsi ragam sisaan homogen **terpenuhi**.
+
+### Sisaan Saling Bebas
+
+```{r}
+dwtest(model2)
+```
+
+Nilai p pada uji Durbin-Watson lebih besar dari alpha 5%, sehingga dinyatakan asumsi sisaan saling bebas **terpenuhi**.
+
+### Normalitas Sisaan
+
+```{r}
+lillie.test(model2$residuals)  # cocok untuk sampel sedang (n = 34)
+```
+
+```{r}
+shapiro.test(model2$residuals)  # cocok untuk sampel kecil
+```
+
+Baik uji Lilliefors maupun Shapiro-Wilk menghasilkan nilai p yang lebih besar dari alpha 5%, sehingga dinyatakan asumsi normalitas sisaan **terpenuhi**. Seluruh asumsi sisaan terpenuhi pada model ini.
+
+# Penanganan Kondisi Tak Standar
+
+## Transformasi Box-Cox
+
+Meskipun seluruh asumsi sisaan pada data ini terpenuhi, transformasi Box-Cox tetap diterapkan sebagai demonstrasi prosedur. Dalam praktik, transformasi Box-Cox digunakan ketika asumsi normalitas atau homoskedastisitas dilanggar. Metode ini mentransformasi peubah respon menggunakan rumus berikut:
+
+$$y' =
+\begin{cases}
+\dfrac{y^\lambda - 1}{\lambda}, & \text{jika } \lambda \neq 0 \\
+\ln(y), & \text{jika } \lambda = 0
+\end{cases}$$
+
+```{r}
+bc_model <- boxcox(PBP ~ IDL + IKU + IKA + SL + TPR, data = dt,
+                   lambda = seq(-2, 2, by = 0.1))
+```
+
+```{r}
+(optimal_lambda <- bc_model$x[which.max(bc_model$y)])
+```
+
+Parameter λ optimum dapat diketahui dengan melihat nilai yang memaksimumkan fungsi log-Likelihood. Berdasarkan grafik di atas, nilai λ optimum mendekati adalah **0.9** yang berada sangat dekat dengan 1. Ketika λ = 1, transformasi Box-Cox menghasilkan $y' = y - 1$ yang secara praktis tidak mengubah model. Hal ini konsisten dengan hasil uji asumsi yang menunjukkan tidak ada pelanggaran — data tidak membutuhkan transformasi.
+
+Meskipun demikian, tetap dilakukan transformasi untuk keperluan demonstrasi:
+
+```{r}
+dt$PBP_tr <- (dt$PBP^optimal_lambda - 1) / optimal_lambda
+```
+
+```{r}
+dt2 <- dt[, c("PBP_tr", setdiff(names(dt), c("PBP", "PBP_tr")))]
+dt2
+```
+
+# Diagnostik Sisaan Hasil Transformasi
+
+Selanjutnya dilakukan pemodelan dan diagnostik sisaan pada data baru dengan peubah respon yang sudah ditransformasi.
+
+```{r}
+model3 <- lm(PBP_tr ~ IDL + IKU + IKA + SL + TPR, data = dt2)
+summary(model3)
+```
+
+Persamaan model setelah transformasi adalah:
+
+$$\hat{PBP^*} =  5.992602 + 0.0191\,IDL - 0.0403\,IKU - 0.0182\,IKA - 0.0165\,SL - 0.0491\,TPR$$
+
+dengan $\hat{PBP^*} = \dfrac{\widehat{PBP}^{0.9} - 1}{0.9}$.
+
+Koefisien model hampir identik dengan model sebelum transformasi, mengkonfirmasi bahwa λ = 0.9 menghasilkan transformasi yang sangat minimal. Adjusted R² model transformasi = 63.93%, sedikit lebih rendah dari model asli (65.07%).
+
+## Eksplorasi Grafik
+
+### Plot Sisaan vs Y Duga
+
+```{r}
+plot(model3, 1)
+```
+
+Pola sisaan tetap acak di sekitar nol dengan lebar pita homogen.
+
+### Plot Sisaan vs Urutan
+
+```{r}
+plot(x = 1:nrow(dt2),
+     y = model3$residuals,
+     type = 'b',
+     ylab = "Residuals",
+     xlab = "Observation")
+```
+
+Tebaran tidak berpola → sisaan saling bebas.
+
+### QQ Plot
+
+```{r}
+plot(model3, 2)
+```
+
+Amatan tetap mengikuti garis diagonal → sisaan menyebar normal.
+
+## Uji Formal
+
+### Nilai Harapan Sisaan Sama dengan Nol
+
+```{r}
+t.test(model3$residuals, mu = 0, conf.level = 0.95)
+```
+
+Asumsi nilai harapan sisaan sama dengan nol **terpenuhi** (p = 1 > 0.05).
+
+### Ragam Sisaan Homogen
+
+```{r}
+bptest(model3)
+```
+
+Asumsi ragam sisaan homogen **terpenuhi** (p > 0.05).
+
+### Sisaan Saling Bebas
+
+```{r}
+dwtest(model3)
+```
+
+Asumsi sisaan saling bebas **terpenuhi** (p > 0.05).
+
+### Normalitas Sisaan
+
+```{r}
+lillie.test(model3$residuals)
+```
+
+```{r}
+shapiro.test(model3$residuals)
+```
+
+Asumsi normalitas sisaan **terpenuhi** (p > 0.05 pada kedua uji). Seluruh asumsi pada model setelah transformasi juga terpenuhi, konsisten dengan model sebelum transformasi.
+
+# Transformasi Balik
+
+Jika ingin mengembalikan model untuk menjelaskan peubah respon sebelum ditransformasi, perlu dilakukan transformasi balik. Prosedur transformasi balik dilakukan secara matematis dengan mengutamakan pengubahan peubah respon terlebih dahulu:
+
+$$\hat{PBP^*} = 6.0193 + 0.0190\,IDL - 0.0404\,IKU - 0.0186\,IKA - 0.0164\,SL - 0.0492\,TPR$$
+
+$$\frac{\widehat{PBP}^{0.9} - 1}{0.9} = 6.0193 + 0.0190\,IDL - 0.0404\,IKU - 0.0186\,IKA - 0.0164\,SL - 0.0492\,TPR$$
